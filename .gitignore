@@ -1,0 +1,26 @@
+# Never upload these to GitHub
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+
+# Environment variables — NEVER upload
+.env
+.zshrc
+
+# Temporary files
+/tmp/
+*.tmp
+
+# Mac system files
+.DS_Store
+
+# VS Code settings
+.vscode/
+
+# Virtual environments
+venv/
+env/
+*.sqlite
+*.db
