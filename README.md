@@ -43,6 +43,17 @@ This tool is designed with data privacy at its core:
 - Python 3.8+
 - An Anthropic API key ([get one here](https://console.anthropic.com))
 
+## 🎨 Design
+
+Screens designed in Figma before building — following a design-first approach.
+
+[View Figma Designs →](https://www.figma.com/design/cWQ6g5FToUlVigY3PVLcz0/M1-Data-Assitant?node-id=24-59&t=yrViGimidBFDcryJ-1)
+
+**Screens designed:**
+- Home Screen — mode selection
+- SQL Assistant Screen — query interface
+- CSV Explainer Screen — file upload and analysis
+
 ### Installation
 
 1. Clone the repository:
