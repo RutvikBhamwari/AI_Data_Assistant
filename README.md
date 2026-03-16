@@ -85,8 +85,8 @@ streamlit run app.py
 ## 📁 Project Structure
 ```
 AI_Data_Assistant/
-├── app.py              # Streamlit web interface
-├── AI_Assistant.py     # Terminal version (combined modes)
+├── app.py              # Terminal version (combined modes)
+├── AI_Assistant.py     # Streamlit web interface
 ├── sql_assistant.py    # SQL Assistant (standalone)
 ├── data_explainer.py   # Data Explainer (standalone)
 ├── sales_data.csv      # Sample dataset for testing
