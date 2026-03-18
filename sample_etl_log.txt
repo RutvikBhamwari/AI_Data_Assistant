@@ -1,0 +1,28 @@
+[2024-01-15 06:00:01] JOB STARTED: daily_sales_load
+[2024-01-15 06:00:45] Extracted 45,231 rows from source_db.sales
+[2024-01-15 06:01:12] Transformed: applied exchange rate conversion
+[2024-01-15 06:01:13] WARNING: 23 rows had null customer_id — skipped
+[2024-01-15 06:02:01] Loaded 45,208 rows to warehouse.sales_fact
+[2024-01-15 06:02:01] JOB COMPLETED: daily_sales_load — duration 2m00s
+
+[2024-01-15 06:05:00] JOB STARTED: customer_dimension_refresh
+[2024-01-15 06:05:45] Extracted 12,450 rows from source_db.customers
+[2024-01-15 06:06:30] ERROR: Connection timeout to warehouse
+[2024-01-15 06:06:30] RETRY 1 of 3...
+[2024-01-15 06:07:30] ERROR: Connection timeout to warehouse
+[2024-01-15 06:07:30] RETRY 2 of 3...
+[2024-01-15 06:08:30] ERROR: Connection timeout to warehouse
+[2024-01-15 06:08:31] JOB FAILED: customer_dimension_refresh — all retries exhausted
+
+[2024-01-15 06:10:00] JOB STARTED: finance_daily_aggregation
+[2024-01-15 06:10:30] Extracted 45,208 rows from warehouse.sales_fact
+[2024-01-15 06:11:45] Transformed: calculated daily totals by region and product
+[2024-01-15 06:11:46] WARNING: 5 rows had negative revenue values — flagged for review
+[2024-01-15 06:12:30] Loaded 892 rows to warehouse.finance_daily
+[2024-01-15 06:12:30] JOB COMPLETED: finance_daily_aggregation — duration 2m30s
+
+[2024-01-15 06:15:00] JOB STARTED: marketing_attribution_load
+[2024-01-15 06:15:45] Extracted 8,920 rows from source_db.campaigns
+[2024-01-15 06:16:30] Transformed: mapped campaign IDs to customer segments
+[2024-01-15 06:17:00] Loaded 8,920 rows to warehouse.marketing_attribution
+[2024-01-15 06:17:00] JOB COMPLETED: marketing_attribution_load — duration 2m00s

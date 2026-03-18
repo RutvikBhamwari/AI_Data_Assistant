@@ -52,13 +52,26 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+# ── Session state initialisation ─────────────────────────────────
+# This runs every time the page loads
+# but session_state values persist across reruns
+# We only initialise if the key doesn't already exist
+
+if "conversation_history" not in st.session_state:
+    st.session_state.conversation_history = []
+
+if "data_summary" not in st.session_state:
+    st.session_state.data_summary = None
+
+if "file_name" not in st.session_state:
+    st.session_state.file_name = None
+
 # ── Mode selection ───────────────────────────────────────────────
 # st.radio creates a radio button selector
 # This replaces our terminal menu
-mode = st.radio(
+mode = st.selectbox(
     "Choose a mode:",
-    ["🗄️ SQL Assistant", "📊 Data Explainer"],
-    horizontal=True  # Display options side by side
+    ["SQL Assistant", "Data Explainer", "ETL Narrator"]
 )
 
 # ── Divider ──────────────────────────────────────────────────────
@@ -228,30 +241,69 @@ def sql_mode():
 # ════════════════════════════════════════════════════════════════
 
 def summarise_csv(df):
-    summary = f"Dataset: {df.shape[0]} rows x {df.shape[1]} columns\n\n"
-    summary += "Columns and types:\n"
+    # Build a privacy-safe summary — stats and structure only
+    # Never sends raw data rows to Claude
+    summary = ""
+    summary += f"Dataset: {df.shape[0]} rows x {df.shape[1]} columns\n\n"
+
+    # Column names and data types
+    summary += "Columns and data types:\n"
     for col in df.columns:
         summary += f"  - {col}: {df[col].dtype}\n"
+
+    # 3 sample rows so Claude understands the data format
     summary += "\nSample rows (first 3):\n"
     summary += df.head(3).to_string(index=False)
+    summary += "\n\n"
+
+    # Statistical summary for numeric columns
     numeric_cols = df.select_dtypes(include='number').columns
     if len(numeric_cols) > 0:
-        summary += "\n\nStatistical summary:\n"
+        summary += "Statistical summary:\n"
         summary += df[numeric_cols].describe().to_string()
+        summary += "\n\n"
+
+    # ── NEW: Pre-calculated aggregations ────────────────────────
+    # We calculate group totals using pandas before sending to Claude
+    # This gives Claude precise numbers without sending raw data rows
+    # Privacy preserved — only aggregated results, not individual records
+
+    categorical_cols = df.select_dtypes(include='object').columns
+
+    for cat_col in categorical_cols:
+        # Only aggregate if column has a reasonable number of categories
+        # Columns with too many unique values (like names) aren't useful to group by
+        unique_values = df[cat_col].nunique()
+        if unique_values <= 20:
+            summary += f"Breakdown by {cat_col}:\n"
+            for num_col in numeric_cols:
+                group_totals = df.groupby(cat_col)[num_col].sum()
+                group_means = df.groupby(cat_col)[num_col].mean().round(2)
+                summary += f"  {num_col} totals: {group_totals.to_dict()}\n"
+                summary += f"  {num_col} averages: {group_means.to_dict()}\n"
+            summary += "\n"
+
+    # Missing value check
     missing = df.isnull().sum()
     if missing.any():
-        summary += "\n\nMissing values:\n"
+        summary += "Missing values:\n"
         for col, count in missing.items():
             if count > 0:
                 summary += f"  - {col}: {count} missing\n"
+    else:
+        summary += "Missing values: None found\n"
+
     return summary
 
-def ask_claude_csv(summary, question=None):
+def ask_claude_csv(summary, question, history=[]):
     client = anthropic.Anthropic()
+    
     system_prompt = """You are an expert data analyst and business intelligence specialist.
 You help non-technical people understand their data clearly and simply.
+You remember the full conversation and can answer follow-up questions
+that reference previous answers.
 
-Format your response exactly like this:
+When given a data summary for the first time, format your response like this:
 
 OVERVIEW:
 <2-3 sentence plain English description>
@@ -268,17 +320,40 @@ SUGGESTED QUESTIONS:
 1. <question this data could answer>
 2. <question this data could answer>
 3. <question this data could answer>
-"""
-    content = f"Dataset summary:\n\n{summary}"
-    if question:
-        content += f"\n\nSpecific question: {question}"
 
+For follow-up questions, answer naturally and conversationally.
+Reference previous answers where relevant.
+"""
+
+    # Build messages list with full conversation history
+    # This is what gives Claude memory of previous exchanges
+    messages = []
+    
+    # Add all previous exchanges first
+    for exchange in history:
+        messages.append({"role": "user", "content": exchange["question"]})
+        messages.append({"role": "assistant", "content": exchange["answer"]})
+    
+    # Add the current question
+    # Include the data summary only in the first message
+    if not history:
+        content = f"Here is the dataset summary:\n\n{summary}\n\nPlease analyse this data."
+        if question:
+            content = f"Here is the dataset summary:\n\n{summary}\n\nSpecific question: {question}"
+    else:
+        # Follow-up questions don't need the full summary again
+        # Claude already has it from the first message
+        content = question
+    
+    messages.append({"role": "user", "content": content})
+    
     message = client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=1024,
         system=system_prompt,
-        messages=[{"role": "user", "content": content}]
+        messages=messages
     )
+    
     return message.content[0].text
 
 def parse_analysis(response):
@@ -314,13 +389,104 @@ def parse_analysis(response):
 
     return sections
 
+# ════════════════════════════════════════════════════════════════
+#  MODE 4 — ETL NARRATOR
+# ════════════════════════════════════════════════════════════════
+
+def narrate_etl_log(log_text):
+    client = anthropic.Anthropic()
+
+    # System prompt built from your real ETL domain knowledge
+    # This is better than what any developer without BI experience would write
+    system_prompt = """You are an expert data engineering analyst who helps 
+business stakeholders understand ETL pipeline logs clearly and quickly.
+
+When given a pipeline log, produce a morning briefing with exactly this format:
+
+PIPELINE SUMMARY:
+<One sentence: X jobs ran, X succeeded, X failed>
+<Time range the pipeline ran>
+
+JOB RESULTS:
+For each job provide:
+[SUCCESS] or [FAILED] <job name> -- <status> -- <duration if available>
+  Rows: <extracted> extracted, <loaded> loaded
+  <Any warnings or errors on the next line, indented>
+
+FAILURES - ACTION REQUIRED:
+<Only if there are failures>
+For each failed job:
+[FAILED] <job name>
+  Cause: <plain English explanation of why it failed>
+  Action: <specific recommended action -- be precise>
+
+WARNINGS - REVIEW RECOMMENDED:
+<Only if there are warnings>
+For each warning:
+[WARNING] <job name>: <plain English explanation and potential impact>
+
+DATA QUALITY FLAGS:
+<Any patterns across jobs that indicate broader data quality issues>
+<Or 'No data quality issues detected'>
+
+Write in plain English for a business audience.
+Be specific about numbers -- rows, durations, timestamps.
+Always recommend a specific action for failures.
+"""
+
+    message = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=2048,
+        system=system_prompt,
+        messages=[
+            {"role": "user", "content": f"Please narrate this ETL log:\n\n{log_text}"}
+        ]
+    )
+    return message.content[0].text
+
+def etl_mode():
+    st.subheader("ETL Log Narrator")
+
+    input_method = st.radio(
+        "How would you like to provide the log?",
+        ["Upload log file", "Paste log text"],
+        horizontal=True
+    )
+
+    log_text = None
+
+    if input_method == "Upload log file":
+        log_file = st.file_uploader(
+            "Upload your ETL log",
+            type=["txt", "log"],
+            help="Upload a .txt or .log file"
+        )
+        if log_file:
+            log_text = log_file.read().decode("utf-8")
+            st.success(f"File loaded: {log_file.name}")
+
+    else:
+        log_text = st.text_area(
+            "Paste your ETL log here",
+            placeholder="Paste your pipeline log output here...",
+            height=300
+        )
+
+    if st.button("Narrate Log", type="primary"):
+        if log_text and log_text.strip():
+            st.subheader("Pipeline Briefing")
+            with st.spinner("Analysing your pipeline log..."):
+                narrative = narrate_etl_log(log_text)
+            st.markdown(narrative)
+        else:
+            st.warning("Please upload or paste a log first")
+
 def csv_mode():
     left_col, right_col = st.columns([4, 6])
 
     with left_col:
         st.subheader("Analyse Your Data")
 
-        # CSV file uploader
         csv_file = st.file_uploader(
             "Upload your CSV file",
             type=["csv"],
@@ -328,73 +494,87 @@ def csv_mode():
         )
 
         if csv_file:
-            # Read CSV directly from the uploaded file object
-            # pandas can read file objects directly — no temp file needed
-            df = pd.read_csv(csv_file)
-            st.success(f"✅ {csv_file.name} — {df.shape[0]} rows, {df.shape[1]} columns")
+            # Only re-process if a new file is uploaded
+            if st.session_state.file_name != csv_file.name:
+                df = pd.read_csv(csv_file)
+                st.session_state.data_summary = summarise_csv(df)
+                st.session_state.file_name = csv_file.name
+                # Clear conversation when new file is loaded
+                st.session_state.conversation_history = []
 
-            # Build summary once
-            summary = summarise_csv(df)
+            st.success(f"✅ {csv_file.name} loaded")
 
-            # Optional specific question
             question = st.text_area(
-                "Ask a specific question (optional)",
+                "Ask a question",
                 placeholder="What would you like to know about this data?",
-                height=80
+                height=80,
+                key="csv_question"
             )
 
-            if st.button("Analyse with Claude", type="primary"):
-                with right_col:
-                    st.subheader("Analysis Results")
+            if st.button("Ask Claude", type="primary", key="csv_ask"):
+                if st.session_state.data_summary:
+                    with st.spinner("Asking Claude..."):
+                        response = ask_claude_csv(
+                            st.session_state.data_summary,
+                            question,
+                            st.session_state.conversation_history
+                        )
 
-                    with st.spinner("Analysing your data..."):
-                        response = ask_claude_csv(summary, question if question else None)
-                        sections = parse_analysis(response)
+                    # Save this exchange to conversation history
+                    st.session_state.conversation_history.append({
+                        "question": question if question else "Please analyse this data.",
+                        "answer": response
+                    })
 
-                    # Display each section separately with styling
-                    if 'overview' in sections:
-                        st.markdown("**OVERVIEW**")
-                        st.write(sections['overview'])
-                        st.divider()
+            # Clear conversation button
+            if st.session_state.conversation_history:
+                if st.button("🗑️ Clear conversation", key="csv_clear"):
+                    st.session_state.conversation_history = []
+                    st.rerun()
 
-                    if 'insights' in sections:
-                        st.markdown("**KEY INSIGHTS**")
-                        st.info(sections['insights'])
-                        st.divider()
-
-                    if 'quality' in sections:
-                        st.markdown("**DATA QUALITY**")
-                        st.write(sections['quality'])
-                        st.divider()
-
-                    if 'questions' in sections:
-                        st.markdown("**SUGGESTED QUESTIONS**")
-                        st.write(sections['questions'])
-
-                    # Follow-up question
-                    st.divider()
-                    follow_up = st.text_input(
-                        "Ask a follow-up question",
-                        placeholder="Ask anything about this data..."
-                    )
-                    if st.button("Ask Follow-up"):
-                        if follow_up:
-                            with st.spinner("Asking Claude..."):
-                                follow_response = ask_claude_csv(summary, follow_up)
-                            st.write(follow_response)
         else:
-            with right_col:
-                st.subheader("Analysis Results")
-                st.markdown("""
-                <div style="text-align: center; color: #94A3B8; padding: 3rem;">
-                    <p style="font-size: 2rem">📊</p>
-                    <p>Upload a CSV file to see your analysis here</p>
+            # Reset state when file is removed
+            st.session_state.data_summary = None
+            st.session_state.file_name = None
+            st.session_state.conversation_history = []
+
+    with right_col:
+        st.subheader("Analysis Results")
+
+        if not st.session_state.conversation_history:
+            # Empty state
+            st.markdown("""
+            <div style="text-align: center; color: #94A3B8; padding: 3rem;">
+                <p style="font-size: 2rem">📊</p>
+                <p>Upload a CSV file and ask a question to start the conversation</p>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            # Display full conversation history
+            for i, exchange in enumerate(st.session_state.conversation_history):
+                # User question bubble
+                st.markdown(f"""
+                <div style="background:#EFF6FF; border-left:3px solid #2563EB; 
+                padding:0.75rem 1rem; border-radius:0 8px 8px 0; margin-bottom:0.5rem;">
+                    <strong style="color:#2563EB;">You</strong><br>
+                    {exchange['question']}
+                </div>
+                """, unsafe_allow_html=True)
+
+                # Claude response
+                st.markdown(f"""
+                <div style="background:#F8F9FA; border-left:3px solid #64748B;
+                padding:0.75rem 1rem; border-radius:0 8px 8px 0; margin-bottom:1rem;">
+                    <strong style="color:#1E293B;">Claude</strong><br>
+                    {exchange['answer']}
                 </div>
                 """, unsafe_allow_html=True)
 
 # ── Route to correct mode ────────────────────────────────────────
 # Based on user's radio button selection
-if mode == "🗄️ SQL Assistant":
+if mode == "SQL Assistant":
     sql_mode()
-elif mode == "📊 Data Explainer":
+elif mode == "Data Explainer":
     csv_mode()
+elif mode == "ETL Narrator":
+    etl_mode()
