@@ -45,14 +45,16 @@ This tool is designed with data privacy at its core:
 
 ## 🎨 Design
 
-Screens designed in Figma before building — following a design-first approach.
+Designed in Figma before building — following a design-first approach.
 
-[View Figma Designs →](https://www.figma.com/design/cWQ6g5FToUlVigY3PVLcz0/M1-Data-Assitant?node-id=24-59&t=yrViGimidBFDcryJ-1)
+[View Figma Designs →](https://www.figma.com/design/cWQ6g5FToUlVigY3PVLcz0/M1-Data-Assitant?node-id=40-13&t=yrViGimidBFDcryJ-1)
 
 **Screens designed:**
 - Home Screen — mode selection
-- SQL Assistant Screen — query interface
+- SQL Assistant Screen — query interface  
 - CSV Explainer Screen — file upload and analysis
+- Conversation Screen — chat interface with memory
+- ETL Narrator Screen — pipeline briefing
 
 ### Installation
 
